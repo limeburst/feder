@@ -1,0 +1,14 @@
+[tools]
+rust = "1.95.0"
+
+[tasks.check]
+description = "Run type check and lint"
+run = [
+    "cargo check",
+    "cargo clippy",
+    "cargo fmt --check",
+]
+
+[tasks.fmt]
+description = "Format code"
+run = "cargo fmt"
