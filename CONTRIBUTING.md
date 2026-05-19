@@ -4,6 +4,10 @@ Contributing to Feder
 Thank you for your interest in contributing to feder. This document outlines
 the development workflow and the tools we use to maintain code quality.
 
+Please also read the project's [AI usage policy](./AI_POLICY.md) before
+submitting issues, discussions, pull requests, or commits that use AI
+assistance.
+
 
 Prerequisites
 -------------
