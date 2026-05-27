@@ -133,14 +133,26 @@ pub fn key_id_from_header(sig_header: &str) -> Option<&str> {
 
 fn rsa_sign(private_key_pem: &str, message: &[u8]) -> anyhow::Result<String> {
     use rsa::pkcs1v15::SigningKey;
-    use rsa::pkcs8::DecodePrivateKey as _;
     use rsa::signature::{SignatureEncoding as _, Signer as _};
 
-    let private_key = rsa::RsaPrivateKey::from_pkcs8_pem(private_key_pem)
+    let private_key = parse_private_key(private_key_pem)
         .context("parse RSA private key")?;
     let signing_key = SigningKey::<Sha256>::new(private_key);
     let sig: rsa::pkcs1v15::Signature = signing_key.sign(message);
     Ok(BASE64.encode(sig.to_bytes()))
+}
+
+/// Parse an RSA private key from either PKCS#8 (`BEGIN PRIVATE KEY`) or
+/// PKCS#1 (`BEGIN RSA PRIVATE KEY`) PEM format.
+fn parse_private_key(pem: &str) -> anyhow::Result<rsa::RsaPrivateKey> {
+    use rsa::pkcs8::DecodePrivateKey as _;
+
+    if let Ok(key) = rsa::RsaPrivateKey::from_pkcs8_pem(pem) {
+        return Ok(key);
+    }
+
+    use rsa::pkcs1::DecodeRsaPrivateKey as _;
+    rsa::RsaPrivateKey::from_pkcs1_pem(pem).context("not valid PKCS#8 or PKCS#1 PEM")
 }
 
 fn rsa_verify(public_key_pem: &str, message: &[u8], sig_b64: &str) -> anyhow::Result<()> {
