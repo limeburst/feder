@@ -109,6 +109,96 @@ pub fn delete(id: &str, actor: &str, object: &str) -> Value {
     })
 }
 
+// ── Like / Undo(Like) ─────────────────────────────────────────────────────────
+
+/// Build a `Like` activity (favourite).
+pub fn like(id: &str, actor: &str, object: &str) -> Value {
+    serde_json::json!({
+        "@context": AS_CONTEXT,
+        "id": id,
+        "type": "Like",
+        "actor": actor,
+        "object": object,
+    })
+}
+
+/// Build an `Undo(Like)` activity (unfavourite).
+pub fn undo_like(id: &str, actor: &str, like_id: &str, like_object: &str) -> Value {
+    serde_json::json!({
+        "@context": AS_CONTEXT,
+        "id": id,
+        "type": "Undo",
+        "actor": actor,
+        "object": {
+            "id": like_id,
+            "type": "Like",
+            "actor": actor,
+            "object": like_object,
+        }
+    })
+}
+
+// ── Announce / Undo(Announce) ─────────────────────────────────────────────────
+
+/// Build an `Announce` activity (boost/reblog).
+pub fn announce(id: &str, actor: &str, object: &str, to: &[&str], cc: &[&str], published: &str) -> Value {
+    serde_json::json!({
+        "@context": AS_CONTEXT,
+        "id": id,
+        "type": "Announce",
+        "actor": actor,
+        "published": published,
+        "to": to,
+        "cc": cc,
+        "object": object,
+    })
+}
+
+/// Build an `Undo(Announce)` activity (unboost).
+pub fn undo_announce(id: &str, actor: &str, announce_id: &str, announce_object: &str) -> Value {
+    serde_json::json!({
+        "@context": AS_CONTEXT,
+        "id": id,
+        "type": "Undo",
+        "actor": actor,
+        "object": {
+            "id": announce_id,
+            "type": "Announce",
+            "actor": actor,
+            "object": announce_object,
+        }
+    })
+}
+
+// ── Block / Undo(Block) ───────────────────────────────────────────────────────
+
+/// Build a `Block` activity.
+pub fn block(id: &str, actor: &str, object: &str) -> Value {
+    serde_json::json!({
+        "@context": AS_CONTEXT,
+        "id": id,
+        "type": "Block",
+        "actor": actor,
+        "object": object,
+    })
+}
+
+/// Build an `Undo(Block)` activity.
+pub fn undo_block(id: &str, actor: &str, block_id: &str, block_object: &str) -> Value {
+    serde_json::json!({
+        "@context": AS_CONTEXT,
+        "id": id,
+        "type": "Undo",
+        "actor": actor,
+        "object": {
+            "id": block_id,
+            "type": "Block",
+            "actor": actor,
+            "object": block_object,
+        }
+    })
+}
+
 // ── Create(Note) ──────────────────────────────────────────────────────────────
 
 /// Parameters for a Note object inside a Create activity.
