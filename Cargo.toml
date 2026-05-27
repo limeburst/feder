@@ -1,3 +1,13 @@
+[workspace]
+members = [".", "crates/feder-vocab", "crates/feder-core"]
+resolver = "2"
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+
 [package]
 name = "feder"
 version = "0.1.0"
@@ -6,8 +16,5 @@ license = "AGPL-3.0-only"
 
 [dependencies]
 
-[lints.rust]
-warnings = "deny"
-
-[lints.clippy]
-all = "deny"
+[lints]
+workspace = true
