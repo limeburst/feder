@@ -1,0 +1,11 @@
+[package]
+name = "feder-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+feder-vocab = { path = "../feder-vocab" }
+
+[lints]
+workspace = true
