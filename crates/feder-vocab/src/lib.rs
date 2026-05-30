@@ -246,16 +246,24 @@ pub fn create_note(activity_id: &str, actor: &str, note: NoteParams<'_>) -> Valu
     }
     if let Some(q) = note.quote_url {
         note_obj["quoteUrl"] = serde_json::Value::String(q.to_string());
+        note_obj["_misskey_quote"] = serde_json::Value::String(q.to_string());
     }
 
-    serde_json::json!({
-        "@context": [
+    // Only extend @context when there is actually a quote to describe.
+    let context: Value = if note.quote_url.is_some() {
+        serde_json::json!([
             AS_CONTEXT,
             {
-                "fep": "https://w3id.org/fep/044f#",
-                "quoteUrl": { "@id": "fep:quote", "@type": "@id" },
+                "quoteUrl": "https://misskey-hub.net/ns#quoteUri",
+                "_misskey_quote": "https://misskey-hub.net/ns#quoteUri",
             }
-        ],
+        ])
+    } else {
+        serde_json::json!(AS_CONTEXT)
+    };
+
+    serde_json::json!({
+        "@context": context,
         "id": activity_id,
         "type": "Create",
         "actor": actor,
