@@ -245,6 +245,10 @@ pub fn create_note(activity_id: &str, actor: &str, note: NoteParams<'_>) -> Valu
         note_obj["inReplyTo"] = serde_json::Value::String(irt.to_string());
     }
     if let Some(q) = note.quote_url {
+        // FEP-044f `quote` property — required for Mastodon to treat the quote as non-legacy
+        // and render it without waiting for explicit QuoteRequest acceptance.
+        note_obj["quote"] = serde_json::Value::String(q.to_string());
+        // Misskey-compatible aliases for broader server support
         note_obj["quoteUrl"] = serde_json::Value::String(q.to_string());
         note_obj["_misskey_quote"] = serde_json::Value::String(q.to_string());
     }
@@ -254,6 +258,7 @@ pub fn create_note(activity_id: &str, actor: &str, note: NoteParams<'_>) -> Valu
         serde_json::json!([
             AS_CONTEXT,
             {
+                "quote": { "@id": "https://w3id.org/fep/044f#quote", "@type": "@id" },
                 "quoteUrl": "https://misskey-hub.net/ns#quoteUri",
                 "_misskey_quote": "https://misskey-hub.net/ns#quoteUri",
             }
