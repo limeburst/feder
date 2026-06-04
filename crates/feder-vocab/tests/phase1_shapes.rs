@@ -5,6 +5,10 @@ fn serialize(value: impl serde::Serialize) -> Value {
     serde_json::to_value(value).expect("serialize vocab value")
 }
 
+fn iri(value: &str) -> Iri {
+    value.parse().expect("valid test IRI")
+}
+
 fn incoming_follow_json() -> serde_json::Value {
     json!({
         "@context": ACTIVITYSTREAMS_CONTEXT,
@@ -26,10 +30,12 @@ fn follow_activity_accepts_id_or_embedded_actor_references() {
     let follow: Follow =
         serde_json::from_value(incoming_follow_json()).expect("deserialize incoming follow");
 
-    assert_eq!(follow.id, "https://remote.example/activities/follow/1");
-    assert!(matches!(follow.actor, Reference::Id(id) if id == "https://remote.example/users/bob"));
+    assert_eq!(follow.id, iri("https://remote.example/activities/follow/1"));
     assert!(
-        matches!(follow.object, Reference::Object(actor) if actor.id == "https://example.com/users/alice")
+        matches!(follow.actor, Reference::Id(id) if id == iri("https://remote.example/users/bob"))
+    );
+    assert!(
+        matches!(follow.object, Reference::Object(actor) if actor.id == iri("https://example.com/users/alice"))
     );
 }
 
@@ -39,8 +45,8 @@ fn accept_activity_can_embed_follow_activity() {
         serde_json::from_value(incoming_follow_json()).expect("deserialize incoming follow");
 
     let outgoing_accept = Accept::new(
-        "https://example.com/activities/accept/1",
-        Reference::id("https://example.com/users/alice"),
+        iri("https://example.com/activities/accept/1"),
+        Reference::id(iri("https://example.com/users/alice")),
         Reference::object(follow),
     );
 
@@ -70,14 +76,14 @@ fn accept_activity_can_embed_follow_activity() {
 
 #[test]
 fn local_note_can_shape_create_note_activity() {
-    let mut note = Note::new("https://example.com/notes/1");
-    note.attributed_to = Some(Reference::id("https://example.com/users/alice"));
+    let mut note = Note::new(iri("https://example.com/notes/1"));
+    note.attributed_to = Some(Reference::id(iri("https://example.com/users/alice")));
     note.content = Some("Hello from Feder.".to_string());
     note.published = Some("2026-06-02T00:00:00Z".to_string());
 
     let create = Create::new(
-        "https://example.com/activities/create/1",
-        Reference::id("https://example.com/users/alice"),
+        iri("https://example.com/activities/create/1"),
+        Reference::id(iri("https://example.com/users/alice")),
         Reference::object(note),
     );
 
@@ -111,9 +117,9 @@ fn reference_keeps_id_and_embedded_object_shapes_distinct() {
     }))
     .expect("deserialize embedded object reference");
 
-    assert!(matches!(id_reference, Reference::Id(id) if id == "https://example.com/notes/1"));
+    assert!(matches!(id_reference, Reference::Id(id) if id == iri("https://example.com/notes/1")));
     assert!(
-        matches!(object_reference, Reference::Object(note) if note.id == "https://example.com/notes/1")
+        matches!(object_reference, Reference::Object(note) if note.id == iri("https://example.com/notes/1"))
     );
 }
 
@@ -130,13 +136,13 @@ fn one_or_many_can_represent_common_recipient_shapes() {
 
     assert_eq!(
         single,
-        feder_vocab::OneOrMany::one("https://www.w3.org/ns/activitystreams#Public".to_string())
+        feder_vocab::OneOrMany::one(iri("https://www.w3.org/ns/activitystreams#Public"))
     );
     assert_eq!(
         multiple,
         feder_vocab::OneOrMany::many([
-            "https://www.w3.org/ns/activitystreams#Public".to_string(),
-            "https://example.com/users/alice/followers".to_string()
+            iri("https://www.w3.org/ns/activitystreams#Public"),
+            iri("https://example.com/users/alice/followers")
         ])
     );
 }
