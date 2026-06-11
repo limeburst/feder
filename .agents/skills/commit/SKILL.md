@@ -12,7 +12,7 @@ Follow `AI_POLICY.md` for AI disclosure.  Every AI-assisted commit must include
 an `Assisted-by` trailer.  For Codex work in this repository, use:
 
 ~~~~
-Assisted-by: Codex:gpt-5.5
+Assisted-by: AGENT_NAME:MODEL_VERSION
 ~~~~
 
 Do not use `Co-authored-by` for AI assistants.

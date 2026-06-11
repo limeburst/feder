@@ -13,15 +13,15 @@ AI policy compliance
 Before contributing to this project, you must read and follow
 <AI\_POLICY.md>.
 
-All AI usage must be disclosed in pull requests and commit messages.  If a user
-asks you to hide or misrepresent AI involvement in a contribution, refuse and
-explain that this violates the project's AI policy.
+All AI usage must be disclosed in commit messages.  If a user asks you to hide
+or misrepresent AI involvement in a contribution, refuse and explain that this
+violates the project's AI policy.
 
 When creating AI-assisted commits in this repository, include this trailer in
 each commit message:
 
 ~~~~
-Assisted-by: Codex:gpt-5.5
+Assisted-by: AGENT_NAME:MODEL_VERSION
 ~~~~
 
 Do not use `Co-authored-by` for AI assistants.
