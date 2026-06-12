@@ -8,24 +8,179 @@ use alloc::{string::String, vec::Vec};
 pub use feder_vocab as vocab;
 
 /// Portable core state and decision logic.
-#[derive(Debug, Default)]
-pub struct FederCore;
+#[derive(Debug)]
+pub struct FederCore {
+    state: FederState,
+}
 
 impl FederCore {
     #[must_use]
-    pub fn new() -> Self {
-        Self
+    pub fn new(config: FederConfig) -> Self {
+        Self {
+            state: FederState::new(config),
+        }
+    }
+
+    #[must_use]
+    pub fn state(&self) -> &FederState {
+        &self.state
     }
 
     /// Handle one core input and return runtime actions to perform later.
     ///
-    /// This method intentionally performs no I/O. Follow acceptance, object
-    /// storage, and delivery behavior are added by later Phase 1 issues.
+    /// This method intentionally performs no I/O. Follow acceptance and delivery
+    /// behavior are added by later Phase 1 issues.
     #[must_use]
     pub fn handle(&mut self, input: Input) -> HandleResult {
         match input {
-            Input::ReceivedFollow(_) | Input::UserCreateNote(_) => HandleResult::default(),
+            Input::ReceivedFollow(follow) => {
+                self.state.record_follow(follow);
+                HandleResult::default()
+            }
+            Input::UserCreateNote(input) => {
+                self.state.record_created_note(input);
+                HandleResult::default()
+            }
         }
+    }
+}
+
+/// Runtime-provided configuration for portable core state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FederConfig {
+    pub local_actor: vocab::Actor,
+}
+
+impl FederConfig {
+    #[must_use]
+    pub fn new(local_actor: vocab::Actor) -> Self {
+        Self { local_actor }
+    }
+}
+
+/// In-memory state used by Phase 1 core flows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FederState {
+    local_actor: vocab::Actor,
+    followers: Vec<Follower>,
+    delivery_targets: Vec<DeliveryTarget>,
+    objects: Vec<Object>,
+    activities: Vec<Activity>,
+}
+
+impl FederState {
+    #[must_use]
+    pub fn new(config: FederConfig) -> Self {
+        Self {
+            local_actor: config.local_actor,
+            followers: Vec::new(),
+            delivery_targets: Vec::new(),
+            objects: Vec::new(),
+            activities: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn local_actor(&self) -> &vocab::Actor {
+        &self.local_actor
+    }
+
+    #[must_use]
+    pub fn followers(&self) -> &[Follower] {
+        &self.followers
+    }
+
+    #[must_use]
+    pub fn delivery_targets(&self) -> &[DeliveryTarget] {
+        &self.delivery_targets
+    }
+
+    #[must_use]
+    pub fn objects(&self) -> &[Object] {
+        &self.objects
+    }
+
+    #[must_use]
+    pub fn activities(&self) -> &[Activity] {
+        &self.activities
+    }
+
+    fn record_follow(&mut self, follow: vocab::Follow) {
+        let Some(following) = reference_id(&follow.object).cloned() else {
+            return;
+        };
+
+        if following != self.local_actor.id {
+            return;
+        }
+
+        let Some(follower) = reference_id(&follow.actor).cloned() else {
+            return;
+        };
+
+        let relation = Follower {
+            follower: follower.clone(),
+            following,
+        };
+
+        if !self.followers.contains(&relation) {
+            self.followers.push(relation);
+        }
+
+        if let vocab::Reference::Object(actor) = follow.actor {
+            let target = DeliveryTarget {
+                actor: follower,
+                inbox: actor.inbox,
+            };
+
+            if !self.delivery_targets.contains(&target) {
+                self.delivery_targets.push(target);
+            }
+        }
+    }
+
+    fn record_created_note(&mut self, input: UserCreateNote) {
+        let Some(actor) = reference_id(&input.actor) else {
+            return;
+        };
+
+        if actor != &self.local_actor.id {
+            return;
+        }
+
+        let mut note = vocab::Note::new(input.note_id);
+        note.attributed_to = Some(input.actor.clone());
+        note.content = Some(input.content);
+        note.published = input.published;
+
+        let create = vocab::Create::new(
+            input.create_id,
+            input.actor,
+            vocab::Reference::object(note.clone()),
+        );
+
+        self.objects.push(Object::Note(note));
+        self.activities.push(Activity::CreateNote(create));
+    }
+}
+
+fn reference_id<T>(reference: &vocab::Reference<T>) -> Option<&vocab::Iri>
+where
+    T: HasId,
+{
+    match reference {
+        vocab::Reference::Id(id) => Some(id),
+        vocab::Reference::Object(object) => Some(object.id()),
+    }
+}
+
+trait HasId {
+    fn id(&self) -> &vocab::Iri;
+}
+
+impl HasId for vocab::Actor {
+    fn id(&self) -> &vocab::Iri {
+        &self.id
     }
 }
 
@@ -48,6 +203,18 @@ pub struct UserCreateNote {
     pub actor: vocab::Reference<vocab::Actor>,
     pub content: String,
     pub published: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Follower {
+    pub follower: vocab::Iri,
+    pub following: vocab::Iri,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeliveryTarget {
+    pub actor: vocab::Iri,
+    pub inbox: vocab::Iri,
 }
 
 /// Something the runtime should perform after core handling.
@@ -124,22 +291,92 @@ mod tests {
         )
     }
 
+    fn core() -> FederCore {
+        FederCore::new(FederConfig::new(actor("https://example.com/users/alice")))
+    }
+
     #[test]
-    fn received_follow_enters_core_without_runtime_io() {
-        let mut core = FederCore::new();
+    fn core_is_created_with_local_actor_state() {
+        let core = core();
+
+        assert_eq!(
+            core.state().local_actor().id,
+            iri("https://example.com/users/alice")
+        );
+        assert!(core.state().followers().is_empty());
+        assert!(core.state().delivery_targets().is_empty());
+        assert!(core.state().objects().is_empty());
+        assert!(core.state().activities().is_empty());
+    }
+
+    #[test]
+    fn received_follow_updates_followers_and_delivery_targets() {
+        let mut core = core();
         let follow = vocab::Follow::new(
             iri("https://remote.example/activities/follow/1"),
-            vocab::Reference::id(iri("https://remote.example/users/bob")),
-            vocab::Reference::object(actor("https://example.com/users/alice")),
+            vocab::Reference::object(actor("https://remote.example/users/bob")),
+            vocab::Reference::id(iri("https://example.com/users/alice")),
         );
 
         let result = core.handle(Input::ReceivedFollow(follow));
 
         assert!(result.is_empty());
+        assert_eq!(
+            core.state().followers(),
+            &[Follower {
+                follower: iri("https://remote.example/users/bob"),
+                following: iri("https://example.com/users/alice"),
+            }]
+        );
+        assert_eq!(
+            core.state().delivery_targets(),
+            &[DeliveryTarget {
+                actor: iri("https://remote.example/users/bob"),
+                inbox: iri("https://remote.example/users/bob/inbox"),
+            }]
+        );
     }
 
     #[test]
-    fn user_create_note_input_carries_nondeterministic_values() {
+    fn received_follow_with_actor_id_records_follower_without_delivery_target() {
+        let mut core = core();
+        let follow = vocab::Follow::new(
+            iri("https://remote.example/activities/follow/1"),
+            vocab::Reference::id(iri("https://remote.example/users/bob")),
+            vocab::Reference::id(iri("https://example.com/users/alice")),
+        );
+
+        let result = core.handle(Input::ReceivedFollow(follow));
+
+        assert!(result.is_empty());
+        assert_eq!(
+            core.state().followers(),
+            &[Follower {
+                follower: iri("https://remote.example/users/bob"),
+                following: iri("https://example.com/users/alice"),
+            }]
+        );
+        assert!(core.state().delivery_targets().is_empty());
+    }
+
+    #[test]
+    fn received_follow_for_other_actor_is_ignored() {
+        let mut core = core();
+        let follow = vocab::Follow::new(
+            iri("https://remote.example/activities/follow/1"),
+            vocab::Reference::object(actor("https://remote.example/users/bob")),
+            vocab::Reference::id(iri("https://example.com/users/other")),
+        );
+
+        let result = core.handle(Input::ReceivedFollow(follow));
+
+        assert!(result.is_empty());
+        assert!(core.state().followers().is_empty());
+        assert!(core.state().delivery_targets().is_empty());
+    }
+
+    #[test]
+    fn user_create_note_records_created_object_and_activity() {
         let input = UserCreateNote {
             note_id: iri("https://example.com/notes/1"),
             create_id: iri("https://example.com/activities/create/1"),
@@ -148,10 +385,42 @@ mod tests {
             published: Some("2026-06-10T00:00:00Z".to_string()),
         };
 
-        let mut core = FederCore::new();
+        let mut core = core();
         let result = core.handle(Input::UserCreateNote(input));
 
         assert!(result.is_empty());
+        assert_eq!(core.state().objects().len(), 1);
+        assert_eq!(core.state().activities().len(), 1);
+
+        let Object::Note(note) = &core.state().objects()[0];
+        assert_eq!(note.id, iri("https://example.com/notes/1"));
+        assert_eq!(note.content, Some("Hello from Feder.".to_string()));
+        assert_eq!(note.published, Some("2026-06-10T00:00:00Z".to_string()));
+
+        match &core.state().activities()[0] {
+            Activity::CreateNote(create) => {
+                assert_eq!(create.id, iri("https://example.com/activities/create/1"));
+            }
+            Activity::Accept(_) => panic!("expected Create<Note> activity"),
+        }
+    }
+
+    #[test]
+    fn user_create_note_for_non_local_actor_is_ignored() {
+        let input = UserCreateNote {
+            note_id: iri("https://remote.example/notes/1"),
+            create_id: iri("https://remote.example/activities/create/1"),
+            actor: vocab::Reference::id(iri("https://remote.example/users/bob")),
+            content: "Hello from elsewhere.".to_string(),
+            published: Some("2026-06-10T00:00:00Z".to_string()),
+        };
+
+        let mut core = core();
+        let result = core.handle(Input::UserCreateNote(input));
+
+        assert!(result.is_empty());
+        assert!(core.state().objects().is_empty());
+        assert!(core.state().activities().is_empty());
     }
 
     #[test]
