@@ -91,6 +91,10 @@ impl FederState {
     }
 
     #[must_use]
+    /// Delivery targets known from embedded actor data.
+    ///
+    /// ID-only followers are tracked in `followers`, but they do not produce a
+    /// delivery target until a runtime or later core flow resolves actor data.
     pub fn delivery_targets(&self) -> &[DeliveryTarget] {
         &self.delivery_targets
     }
@@ -213,6 +217,10 @@ pub struct Follower {
     pub following: vocab::Iri,
 }
 
+/// A known actor inbox for future delivery.
+///
+/// Phase 1 records this only when an incoming object embeds enough actor data
+/// to expose an inbox. It does not imply every follower has been resolved.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryTarget {
     pub actor: vocab::Iri,
