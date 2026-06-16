@@ -137,7 +137,13 @@ impl FederState {
                 inbox: actor.inbox,
             };
 
-            if !self.delivery_targets.contains(&target) {
+            if let Some(existing) = self
+                .delivery_targets
+                .iter_mut()
+                .find(|existing| existing.actor == target.actor)
+            {
+                existing.inbox = target.inbox;
+            } else {
                 self.delivery_targets.push(target);
             }
         }
@@ -343,6 +349,42 @@ mod tests {
             &[DeliveryTarget {
                 actor: iri("https://remote.example/users/bob"),
                 inbox: iri("https://remote.example/users/bob/inbox"),
+            }]
+        );
+    }
+
+    #[test]
+    fn received_follow_updates_existing_delivery_target_by_actor() {
+        let mut core = core();
+        let first_follow = vocab::Follow::new(
+            iri("https://remote.example/activities/follow/1"),
+            vocab::Reference::object(actor("https://remote.example/users/bob")),
+            vocab::Reference::id(iri("https://example.com/users/alice")),
+        );
+
+        let mut updated_actor = actor("https://remote.example/users/bob");
+        updated_actor.inbox = iri("https://remote.example/inboxes/bob");
+        let second_follow = vocab::Follow::new(
+            iri("https://remote.example/activities/follow/2"),
+            vocab::Reference::object(updated_actor),
+            vocab::Reference::id(iri("https://example.com/users/alice")),
+        );
+
+        assert!(core.handle(Input::ReceivedFollow(first_follow)).is_empty());
+        assert!(core.handle(Input::ReceivedFollow(second_follow)).is_empty());
+
+        assert_eq!(
+            core.state().followers(),
+            &[Follower {
+                follower: iri("https://remote.example/users/bob"),
+                following: iri("https://example.com/users/alice"),
+            }]
+        );
+        assert_eq!(
+            core.state().delivery_targets(),
+            &[DeliveryTarget {
+                actor: iri("https://remote.example/users/bob"),
+                inbox: iri("https://remote.example/inboxes/bob"),
             }]
         );
     }
