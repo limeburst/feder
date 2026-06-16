@@ -148,14 +148,16 @@ impl FederState {
             return;
         }
 
+        let actor = vocab::Reference::id(self.local_actor.id.clone());
+
         let mut note = vocab::Note::new(input.note_id);
-        note.attributed_to = Some(input.actor.clone());
+        note.attributed_to = Some(actor.clone());
         note.content = Some(input.content);
         note.published = input.published;
 
         let create = vocab::Create::new(
             input.create_id,
-            input.actor,
+            actor,
             vocab::Reference::object(note.clone()),
         );
 
@@ -394,15 +396,56 @@ mod tests {
 
         let Object::Note(note) = &core.state().objects()[0];
         assert_eq!(note.id, iri("https://example.com/notes/1"));
+        assert_eq!(
+            note.attributed_to,
+            Some(vocab::Reference::id(iri("https://example.com/users/alice")))
+        );
         assert_eq!(note.content, Some("Hello from Feder.".to_string()));
         assert_eq!(note.published, Some("2026-06-10T00:00:00Z".to_string()));
 
         match &core.state().activities()[0] {
             Activity::CreateNote(create) => {
                 assert_eq!(create.id, iri("https://example.com/activities/create/1"));
+                assert_eq!(
+                    create.actor,
+                    vocab::Reference::id(iri("https://example.com/users/alice"))
+                );
             }
             Activity::Accept(_) => panic!("expected Create<Note> activity"),
         }
+    }
+
+    #[test]
+    fn user_create_note_normalizes_embedded_local_actor_to_local_actor_id() {
+        let mut supplied_actor = actor("https://example.com/users/alice");
+        supplied_actor.inbox = iri("https://untrusted.example/inbox");
+
+        let input = UserCreateNote {
+            note_id: iri("https://example.com/notes/1"),
+            create_id: iri("https://example.com/activities/create/1"),
+            actor: vocab::Reference::object(supplied_actor),
+            content: "Hello from Feder.".to_string(),
+            published: None,
+        };
+
+        let mut core = core();
+        let result = core.handle(Input::UserCreateNote(input));
+
+        assert!(result.is_empty());
+
+        let Object::Note(note) = &core.state().objects()[0];
+        assert_eq!(
+            note.attributed_to,
+            Some(vocab::Reference::id(iri("https://example.com/users/alice")))
+        );
+
+        let Activity::CreateNote(create) = &core.state().activities()[0] else {
+            panic!("expected Create<Note> activity");
+        };
+        assert_eq!(
+            create.actor,
+            vocab::Reference::id(iri("https://example.com/users/alice"))
+        );
     }
 
     #[test]
