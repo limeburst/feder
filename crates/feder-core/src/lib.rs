@@ -149,15 +149,26 @@ impl FederState {
                 actor: follower,
                 inbox: actor.inbox.clone(),
             };
+            let mut should_store_target = false;
 
             if let Some(existing) = self
                 .delivery_targets
                 .iter_mut()
                 .find(|existing| existing.actor == target.actor)
             {
-                existing.inbox = target.inbox;
+                if existing.inbox != target.inbox {
+                    existing.inbox = target.inbox.clone();
+                    should_store_target = true;
+                }
             } else {
-                self.delivery_targets.push(target);
+                self.delivery_targets.push(target.clone());
+                should_store_target = true;
+            }
+
+            if should_store_target {
+                actions.push(Action::StoreDeliveryTarget(StoreDeliveryTarget {
+                    target: target.clone(),
+                }));
             }
 
             inbox = Some(actor.inbox.clone());
@@ -290,6 +301,7 @@ pub struct DeliveryTarget {
 #[non_exhaustive]
 pub enum Action {
     StoreFollower(StoreFollower),
+    StoreDeliveryTarget(StoreDeliveryTarget),
     StoreObject(StoreObject),
     SendActivity(SendActivity),
 }
@@ -298,6 +310,11 @@ pub enum Action {
 pub struct StoreFollower {
     pub follower: vocab::Reference<vocab::Actor>,
     pub following: vocab::Reference<vocab::Actor>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoreDeliveryTarget {
+    pub target: DeliveryTarget,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -398,7 +415,7 @@ mod tests {
             "https://example.com/activities/accept/1",
         ));
 
-        assert_eq!(result.actions.len(), 2);
+        assert_eq!(result.actions.len(), 3);
         assert_eq!(
             core.state().followers(),
             &[Follower {
@@ -420,8 +437,17 @@ mod tests {
                 following: vocab::Reference::id(iri("https://example.com/users/alice")),
             })
         );
+        assert_eq!(
+            result.actions[1],
+            Action::StoreDeliveryTarget(StoreDeliveryTarget {
+                target: DeliveryTarget {
+                    actor: iri("https://remote.example/users/bob"),
+                    inbox: iri("https://remote.example/users/bob/inbox"),
+                },
+            })
+        );
 
-        let Action::SendActivity(send) = &result.actions[1] else {
+        let Action::SendActivity(send) = &result.actions[2] else {
             panic!("expected SendActivity action");
         };
         assert_eq!(send.inbox, iri("https://remote.example/users/bob/inbox"));
@@ -469,15 +495,27 @@ mod tests {
             "https://example.com/activities/accept/2",
         ));
 
-        assert_eq!(first_result.actions.len(), 2);
-        assert_eq!(second_result.actions.len(), 1);
-        assert!(matches!(
+        assert_eq!(first_result.actions.len(), 3);
+        assert_eq!(second_result.actions.len(), 2);
+        assert_eq!(
             second_result.actions[0],
-            Action::SendActivity(SendActivity {
-                activity: Activity::Accept(_),
-                ..
+            Action::StoreDeliveryTarget(StoreDeliveryTarget {
+                target: DeliveryTarget {
+                    actor: iri("https://remote.example/users/bob"),
+                    inbox: iri("https://remote.example/inboxes/bob"),
+                },
             })
-        ));
+        );
+
+        let Action::SendActivity(send) = &second_result.actions[1] else {
+            panic!("expected SendActivity action");
+        };
+        assert_eq!(send.inbox, iri("https://remote.example/inboxes/bob"));
+
+        let Activity::Accept(accept) = &send.activity else {
+            panic!("expected Accept activity");
+        };
+        assert_eq!(accept.id, iri("https://example.com/activities/accept/2"));
 
         assert_eq!(
             core.state().followers(),
@@ -701,9 +739,13 @@ mod tests {
             "https://example.com/activities/accept/1",
         ));
 
-        assert_eq!(follow_result.actions.len(), 2);
+        assert_eq!(follow_result.actions.len(), 3);
         assert!(matches!(follow_result.actions[0], Action::StoreFollower(_)));
-        let Action::SendActivity(accept_delivery) = &follow_result.actions[1] else {
+        assert!(matches!(
+            follow_result.actions[1],
+            Action::StoreDeliveryTarget(_)
+        ));
+        let Action::SendActivity(accept_delivery) = &follow_result.actions[2] else {
             panic!("expected Accept delivery action");
         };
         assert_eq!(
