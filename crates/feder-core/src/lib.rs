@@ -28,14 +28,14 @@ impl FederCore {
 
     /// Handle one core input and return runtime actions to perform later.
     ///
-    /// This method intentionally performs no I/O. Follow acceptance and delivery
-    /// behavior are added by later Phase 1 issues.
+    /// This method intentionally performs no I/O. Returned actions describe
+    /// work for a runtime or test harness to perform later.
     #[must_use]
     pub fn handle(&mut self, input: Input) -> HandleResult {
         match input {
-            Input::ReceivedFollow(follow) => {
-                self.state.record_follow(follow);
-                HandleResult::default()
+            Input::ReceivedFollow(input) => {
+                let actions = self.state.record_follow(input);
+                HandleResult::new(actions)
             }
             Input::UserCreateNote(input) => {
                 self.state.record_created_note(input);
@@ -109,32 +109,45 @@ impl FederState {
         &self.activities
     }
 
-    fn record_follow(&mut self, follow: vocab::Follow) {
+    fn record_follow(&mut self, input: ReceivedFollow) -> Vec<Action> {
+        let follow = input.follow;
         let Some(following) = reference_id(&follow.object).cloned() else {
-            return;
+            return Vec::new();
         };
 
         if following != self.local_actor.id {
-            return;
+            return Vec::new();
         }
 
         let Some(follower) = reference_id(&follow.actor).cloned() else {
-            return;
+            return Vec::new();
         };
 
         let relation = Follower {
             follower: follower.clone(),
             following,
         };
+        let mut actions = Vec::new();
 
         if !self.followers.contains(&relation) {
-            self.followers.push(relation);
+            self.followers.push(relation.clone());
         }
 
-        if let vocab::Reference::Object(actor) = follow.actor {
+        actions.push(Action::StoreFollower(StoreFollower {
+            follower: follow.actor.clone(),
+            following: follow.object.clone(),
+        }));
+
+        let mut inbox = self
+            .delivery_targets
+            .iter()
+            .find(|target| target.actor == follower)
+            .map(|target| target.inbox.clone());
+
+        if let vocab::Reference::Object(actor) = &follow.actor {
             let target = DeliveryTarget {
                 actor: follower,
-                inbox: actor.inbox,
+                inbox: actor.inbox.clone(),
             };
 
             if let Some(existing) = self
@@ -146,7 +159,24 @@ impl FederState {
             } else {
                 self.delivery_targets.push(target);
             }
+
+            inbox = Some(actor.inbox.clone());
         }
+
+        if let Some(inbox) = inbox {
+            let accept = vocab::Accept::new(
+                input.accept_id,
+                vocab::Reference::id(self.local_actor.id.clone()),
+                vocab::Reference::object(follow),
+            );
+
+            actions.push(Action::SendActivity(SendActivity {
+                activity: Activity::Accept(accept),
+                inbox,
+            }));
+        }
+
+        actions
     }
 
     fn record_created_note(&mut self, input: UserCreateNote) {
@@ -200,8 +230,18 @@ impl HasId for vocab::Actor {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Input {
-    ReceivedFollow(vocab::Follow),
+    ReceivedFollow(ReceivedFollow),
     UserCreateNote(UserCreateNote),
+}
+
+/// Runtime-provided data for handling a received Follow.
+///
+/// The Accept activity ID is an input so the core does not depend on clocks,
+/// randomness, or platform-specific ID generation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReceivedFollow {
+    pub follow: vocab::Follow,
+    pub accept_id: vocab::Iri,
 }
 
 /// Runtime-provided data for creating a local note.
@@ -311,6 +351,13 @@ mod tests {
         FederCore::new(FederConfig::new(actor("https://example.com/users/alice")))
     }
 
+    fn received_follow(follow: vocab::Follow, id: &str) -> Input {
+        Input::ReceivedFollow(ReceivedFollow {
+            follow,
+            accept_id: iri(id),
+        })
+    }
+
     #[test]
     fn core_is_created_with_local_actor_state() {
         let core = core();
@@ -326,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn received_follow_updates_followers_and_delivery_targets() {
+    fn received_follow_records_follower_and_emits_accept_actions() {
         let mut core = core();
         let follow = vocab::Follow::new(
             iri("https://remote.example/activities/follow/1"),
@@ -334,9 +381,12 @@ mod tests {
             vocab::Reference::id(iri("https://example.com/users/alice")),
         );
 
-        let result = core.handle(Input::ReceivedFollow(follow));
+        let result = core.handle(received_follow(
+            follow,
+            "https://example.com/activities/accept/1",
+        ));
 
-        assert!(result.is_empty());
+        assert_eq!(result.actions.len(), 2);
         assert_eq!(
             core.state().followers(),
             &[Follower {
@@ -350,6 +400,34 @@ mod tests {
                 actor: iri("https://remote.example/users/bob"),
                 inbox: iri("https://remote.example/users/bob/inbox"),
             }]
+        );
+        assert_eq!(
+            result.actions[0],
+            Action::StoreFollower(StoreFollower {
+                follower: vocab::Reference::object(actor("https://remote.example/users/bob")),
+                following: vocab::Reference::id(iri("https://example.com/users/alice")),
+            })
+        );
+
+        let Action::SendActivity(send) = &result.actions[1] else {
+            panic!("expected SendActivity action");
+        };
+        assert_eq!(send.inbox, iri("https://remote.example/users/bob/inbox"));
+
+        let Activity::Accept(accept) = &send.activity else {
+            panic!("expected Accept activity");
+        };
+        assert_eq!(accept.id, iri("https://example.com/activities/accept/1"));
+        assert_eq!(
+            accept.actor,
+            vocab::Reference::id(iri("https://example.com/users/alice"))
+        );
+        let vocab::Reference::Object(accepted_follow) = &accept.object else {
+            panic!("expected embedded Follow object");
+        };
+        assert_eq!(
+            accepted_follow.id,
+            iri("https://remote.example/activities/follow/1")
         );
     }
 
@@ -370,8 +448,17 @@ mod tests {
             vocab::Reference::id(iri("https://example.com/users/alice")),
         );
 
-        assert!(core.handle(Input::ReceivedFollow(first_follow)).is_empty());
-        assert!(core.handle(Input::ReceivedFollow(second_follow)).is_empty());
+        let first_result = core.handle(received_follow(
+            first_follow,
+            "https://example.com/activities/accept/1",
+        ));
+        let second_result = core.handle(received_follow(
+            second_follow,
+            "https://example.com/activities/accept/2",
+        ));
+
+        assert_eq!(first_result.actions.len(), 2);
+        assert_eq!(second_result.actions.len(), 2);
 
         assert_eq!(
             core.state().followers(),
@@ -398,9 +485,18 @@ mod tests {
             vocab::Reference::id(iri("https://example.com/users/alice")),
         );
 
-        let result = core.handle(Input::ReceivedFollow(follow));
+        let result = core.handle(received_follow(
+            follow,
+            "https://example.com/activities/accept/1",
+        ));
 
-        assert!(result.is_empty());
+        assert_eq!(
+            result.actions,
+            Vec::from([Action::StoreFollower(StoreFollower {
+                follower: vocab::Reference::id(iri("https://remote.example/users/bob")),
+                following: vocab::Reference::id(iri("https://example.com/users/alice")),
+            })])
+        );
         assert_eq!(
             core.state().followers(),
             &[Follower {
@@ -420,7 +516,10 @@ mod tests {
             vocab::Reference::id(iri("https://example.com/users/other")),
         );
 
-        let result = core.handle(Input::ReceivedFollow(follow));
+        let result = core.handle(received_follow(
+            follow,
+            "https://example.com/activities/accept/1",
+        ));
 
         assert!(result.is_empty());
         assert!(core.state().followers().is_empty());
