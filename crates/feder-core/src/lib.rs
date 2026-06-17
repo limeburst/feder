@@ -681,6 +681,56 @@ mod tests {
     }
 
     #[test]
+    fn mocked_core_flow_accepts_follow_then_delivers_created_note() {
+        let mut core = core();
+        let follow = vocab::Follow::new(
+            iri("https://remote.example/activities/follow/1"),
+            vocab::Reference::object(actor("https://remote.example/users/bob")),
+            vocab::Reference::id(iri("https://example.com/users/alice")),
+        );
+
+        let follow_result = core.handle(received_follow(
+            follow,
+            "https://example.com/activities/accept/1",
+        ));
+
+        assert_eq!(follow_result.actions.len(), 2);
+        assert!(matches!(follow_result.actions[0], Action::StoreFollower(_)));
+        let Action::SendActivity(accept_delivery) = &follow_result.actions[1] else {
+            panic!("expected Accept delivery action");
+        };
+        assert_eq!(
+            accept_delivery.inbox,
+            iri("https://remote.example/users/bob/inbox")
+        );
+        assert!(matches!(accept_delivery.activity, Activity::Accept(_)));
+
+        let create_result = core.handle(Input::UserCreateNote(UserCreateNote {
+            note_id: iri("https://example.com/notes/1"),
+            create_id: iri("https://example.com/activities/create/1"),
+            actor: vocab::Reference::id(iri("https://example.com/users/alice")),
+            content: "Hello from Feder.".to_string(),
+            published: Some("2026-06-10T00:00:00Z".to_string()),
+        }));
+
+        assert_eq!(create_result.actions.len(), 2);
+        assert!(matches!(create_result.actions[0], Action::StoreObject(_)));
+        let Action::SendActivity(create_delivery) = &create_result.actions[1] else {
+            panic!("expected Create<Note> delivery action");
+        };
+        assert_eq!(
+            create_delivery.inbox,
+            iri("https://remote.example/users/bob/inbox")
+        );
+        assert!(matches!(create_delivery.activity, Activity::CreateNote(_)));
+
+        assert_eq!(core.state().followers().len(), 1);
+        assert_eq!(core.state().delivery_targets().len(), 1);
+        assert_eq!(core.state().objects().len(), 1);
+        assert_eq!(core.state().activities().len(), 1);
+    }
+
+    #[test]
     fn user_create_note_normalizes_embedded_local_actor_to_local_actor_id() {
         let mut supplied_actor = actor("https://example.com/users/alice");
         supplied_actor.inbox = iri("https://untrusted.example/inbox");
