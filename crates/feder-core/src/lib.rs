@@ -131,12 +131,12 @@ impl FederState {
 
         if !self.followers.contains(&relation) {
             self.followers.push(relation.clone());
-        }
 
-        actions.push(Action::StoreFollower(StoreFollower {
-            follower: follow.actor.clone(),
-            following: follow.object.clone(),
-        }));
+            actions.push(Action::StoreFollower(StoreFollower {
+                follower: follow.actor.clone(),
+                following: follow.object.clone(),
+            }));
+        }
 
         let mut inbox = self
             .delivery_targets
@@ -470,7 +470,14 @@ mod tests {
         ));
 
         assert_eq!(first_result.actions.len(), 2);
-        assert_eq!(second_result.actions.len(), 2);
+        assert_eq!(second_result.actions.len(), 1);
+        assert!(matches!(
+            second_result.actions[0],
+            Action::SendActivity(SendActivity {
+                activity: Activity::Accept(_),
+                ..
+            })
+        ));
 
         assert_eq!(
             core.state().followers(),
