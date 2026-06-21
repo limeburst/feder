@@ -7,6 +7,8 @@ use alloc::{string::String, vec::Vec};
 
 pub use feder_vocab as vocab;
 
+pub mod addressing;
+
 /// Portable core state and decision logic.
 #[derive(Debug)]
 pub struct FederCore {
