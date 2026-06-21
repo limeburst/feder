@@ -541,6 +541,158 @@ impl<T> Undo<T> {
     }
 }
 
+// ── Consent handshake (FEP-style request / accept-with-result / reject) ────────
+//
+// A reusable pattern shared by interactions that need the target's consent:
+// the requester sends a `Request`, the target replies with an `Accept` carrying
+// a `result` authorization URI (a stamp the requester can reference and others
+// can verify) or a `Reject`. Quote posts (`QuoteRequest` + `QuoteAuthorization`)
+// and account features (`FeatureRequest` + `FeatureAuthorization`) are the two
+// concrete uses.
+
+/// The kind of consent being requested.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum RequestType {
+    /// Request permission to quote a post (FEP-044f).
+    #[default]
+    QuoteRequest,
+    /// Request permission to feature an account in a collection.
+    FeatureRequest,
+}
+
+/// The kind of authorization stamp granted by an [`Accept`]'s `result`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum AuthorizationType {
+    /// Stamp proving a quote was authorized (FEP-044f).
+    #[default]
+    QuoteAuthorization,
+    /// Stamp proving an account consented to being featured.
+    FeatureAuthorization,
+}
+
+/// A consent request: the requester (`actor`) asks the owner of `object` for
+/// permission to interact, where `instrument` is the requesting object (the
+/// quote post, or the collection doing the featuring). `id` is the request's
+/// own activity URI, later referenced by the [`ConsentAccept`]/[`ConsentReject`].
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ConsentRequest {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: RequestType,
+    pub id: Iri,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor: Option<Reference<Actor>>,
+    pub object: Iri,
+    pub instrument: Iri,
+}
+
+impl ConsentRequest {
+    #[must_use]
+    pub fn new(kind: RequestType, id: Iri, object: Iri, instrument: Iri) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind,
+            id,
+            actor: None,
+            object,
+            instrument,
+        }
+    }
+}
+
+/// An `Accept` granting a [`ConsentRequest`]. `object` is the request's URI and
+/// `result` points to the [`Authorization`] stamp the granter published.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ConsentAccept {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: AcceptType,
+    pub id: Iri,
+    pub actor: Reference<Actor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<Iri>,
+    pub object: Iri,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Iri>,
+}
+
+impl ConsentAccept {
+    #[must_use]
+    pub fn new(id: Iri, actor: Reference<Actor>, object: Iri, result: Iri) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind: AcceptType::default(),
+            id,
+            actor,
+            to: None,
+            object,
+            result: Some(result),
+        }
+    }
+}
+
+/// A `Reject` declining a [`ConsentRequest`]. `object` is the request's URI.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ConsentReject {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: RejectType,
+    pub id: Iri,
+    pub actor: Reference<Actor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<Iri>,
+    pub object: Iri,
+}
+
+impl ConsentReject {
+    #[must_use]
+    pub fn new(id: Iri, actor: Reference<Actor>, object: Iri) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind: RejectType::default(),
+            id,
+            actor,
+            to: None,
+            object,
+        }
+    }
+}
+
+/// An authorization stamp pointed to by a [`ConsentAccept`]'s `result`.
+/// `interacting_object` is the requesting object (quote post / collection) and
+/// `interaction_target` is the consented-to object (quoted status / account).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Authorization {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: AuthorizationType,
+    pub id: Iri,
+    #[serde(rename = "attributedTo", skip_serializing_if = "Option::is_none")]
+    pub attributed_to: Option<Reference<Actor>>,
+    #[serde(rename = "interactingObject")]
+    pub interacting_object: Iri,
+    #[serde(rename = "interactionTarget")]
+    pub interaction_target: Iri,
+}
+
+impl Authorization {
+    #[must_use]
+    pub fn new(kind: AuthorizationType, id: Iri, interacting_object: Iri, interaction_target: Iri) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind,
+            id,
+            attributed_to: None,
+            interacting_object,
+            interaction_target,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,6 +863,81 @@ mod tests {
         note.cc = Vec::from([iri("https://example.com/users/alice/followers")]);
         note.published = Some("2026-05-29T06:30:00Z".to_string());
         assert_eq!(roundtrip(&note), note);
+    }
+
+    #[test]
+    fn consent_pattern_quote_and_feature_shapes() {
+        // Quote request → accept-with-result, plus its authorization stamp.
+        let mut req = ConsentRequest::new(
+            RequestType::QuoteRequest,
+            iri("https://a.test/users/alice/quote_requests/1"),
+            iri("https://b.test/notes/9"),
+            iri("https://a.test/notes/1"),
+        );
+        req.actor = Some(Reference::id(iri("https://a.test/users/alice")));
+        let v = serde_json::to_value(&req).expect("serialize quote request");
+        assert_eq!(v["type"], "QuoteRequest");
+        assert_eq!(v["object"], "https://b.test/notes/9");
+        assert_eq!(v["instrument"], "https://a.test/notes/1");
+        assert_eq!(v["actor"], "https://a.test/users/alice");
+        assert_eq!(roundtrip(&req), req);
+
+        let accept = ConsentAccept::new(
+            iri("https://b.test/users/bob#accepts/quote_requests/1"),
+            Reference::id(iri("https://b.test/users/bob")),
+            iri("https://a.test/users/alice/quote_requests/1"),
+            iri("https://b.test/notes/9/approvals/1"),
+        );
+        let av = serde_json::to_value(&accept).expect("serialize accept");
+        assert_eq!(av["type"], "Accept");
+        assert_eq!(av["object"], "https://a.test/users/alice/quote_requests/1");
+        assert_eq!(av["result"], "https://b.test/notes/9/approvals/1");
+        assert_eq!(roundtrip(&accept), accept);
+
+        let mut stamp = Authorization::new(
+            AuthorizationType::QuoteAuthorization,
+            iri("https://b.test/notes/9/approvals/1"),
+            iri("https://a.test/notes/1"),
+            iri("https://b.test/notes/9"),
+        );
+        stamp.attributed_to = Some(Reference::id(iri("https://b.test/users/bob")));
+        let sv = serde_json::to_value(&stamp).expect("serialize authorization");
+        assert_eq!(sv["type"], "QuoteAuthorization");
+        assert_eq!(sv["attributedTo"], "https://b.test/users/bob");
+        assert_eq!(sv["interactingObject"], "https://a.test/notes/1");
+        assert_eq!(sv["interactionTarget"], "https://b.test/notes/9");
+        assert_eq!(roundtrip(&stamp), stamp);
+
+        // Feature request reuses the same types with different markers; the
+        // feature authorization omits attributedTo.
+        let freq = ConsentRequest::new(
+            RequestType::FeatureRequest,
+            iri("https://a.test/users/alice/feature_requests/1"),
+            iri("https://b.test/users/bob"),
+            iri("https://a.test/collections/1"),
+        );
+        assert_eq!(
+            serde_json::to_value(&freq).expect("serialize feature request")["type"],
+            "FeatureRequest"
+        );
+        let fstamp = Authorization::new(
+            AuthorizationType::FeatureAuthorization,
+            iri("https://b.test/users/bob/feature_authorizations/1"),
+            iri("https://a.test/collections/1"),
+            iri("https://b.test/users/bob"),
+        );
+        let fv = serde_json::to_value(&fstamp).expect("serialize feature authorization");
+        assert_eq!(fv["type"], "FeatureAuthorization");
+        assert!(fv.get("attributedTo").is_none());
+        assert_eq!(roundtrip(&fstamp), fstamp);
+
+        let reject = ConsentReject::new(
+            iri("https://b.test/users/bob#rejects/feature_requests/1"),
+            Reference::id(iri("https://b.test/users/bob")),
+            iri("https://a.test/users/alice/feature_requests/1"),
+        );
+        assert_eq!(serde_json::to_value(&reject).expect("serialize reject")["type"], "Reject");
+        assert_eq!(roundtrip(&reject), reject);
     }
 
     #[test]
