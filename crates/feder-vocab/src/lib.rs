@@ -14,8 +14,18 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq}
 /// The canonical Activity Streams JSON-LD context URL.
 pub const ACTIVITYSTREAMS_CONTEXT: &str = "https://www.w3.org/ns/activitystreams";
 
+/// The special collection addressing every actor (public posts).
+pub const ACTIVITYSTREAMS_PUBLIC: &str = "https://www.w3.org/ns/activitystreams#Public";
+
 /// An absolute ActivityPub/ActivityStreams identifier.
 pub type Iri = IriString;
+
+/// Build the default top-level `@context` IRI value.
+fn default_context() -> Iri {
+    ACTIVITYSTREAMS_CONTEXT
+        .parse()
+        .expect("valid ActivityStreams IRI")
+}
 
 /// A non-scalar ActivityStreams property value.
 ///
@@ -153,9 +163,16 @@ macro_rules! activitystreams_type {
 }
 
 activitystreams_type!(NoteType, Note);
+activitystreams_type!(TombstoneType, Tombstone);
 activitystreams_type!(FollowType, Follow);
 activitystreams_type!(AcceptType, Accept);
+activitystreams_type!(RejectType, Reject);
 activitystreams_type!(CreateType, Create);
+activitystreams_type!(UndoType, Undo);
+activitystreams_type!(LikeType, Like);
+activitystreams_type!(AnnounceType, Announce);
+activitystreams_type!(BlockType, Block);
+activitystreams_type!(DeleteType, Delete);
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ActorType {
@@ -218,7 +235,19 @@ pub struct Note {
     #[serde(rename = "attributedTo", skip_serializing_if = "Option::is_none")]
     pub attributed_to: Option<Reference<Actor>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sensitive: Option<bool>,
+    #[serde(rename = "inReplyTo", skip_serializing_if = "Option::is_none")]
+    pub in_reply_to: Option<Iri>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<Iri>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub to: Vec<Iri>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cc: Vec<Iri>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published: Option<String>,
 }
@@ -227,15 +256,17 @@ impl Note {
     #[must_use]
     pub fn new(id: Iri) -> Self {
         Self {
-            context: Some(
-                ACTIVITYSTREAMS_CONTEXT
-                    .parse()
-                    .expect("valid ActivityStreams IRI"),
-            ),
+            context: Some(default_context()),
             kind: NoteType::default(),
             id,
             attributed_to: None,
+            summary: None,
             content: None,
+            sensitive: None,
+            in_reply_to: None,
+            url: None,
+            to: Vec::new(),
+            cc: Vec::new(),
             published: None,
         }
     }
@@ -308,6 +339,10 @@ pub struct Create<T> {
     pub kind: CreateType,
     pub id: Iri,
     pub actor: Reference<Actor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub to: Vec<Iri>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cc: Vec<Iri>,
     pub object: Reference<T>,
 }
 
@@ -315,12 +350,190 @@ impl<T> Create<T> {
     #[must_use]
     pub fn new(id: Iri, actor: Reference<Actor>, object: Reference<T>) -> Self {
         Self {
-            context: Some(
-                ACTIVITYSTREAMS_CONTEXT
-                    .parse()
-                    .expect("valid ActivityStreams IRI"),
-            ),
+            context: Some(default_context()),
             kind: CreateType::default(),
+            id,
+            actor,
+            to: Vec::new(),
+            cc: Vec::new(),
+            object,
+        }
+    }
+}
+
+/// A `Reject` activity (e.g. declining a follow request).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Reject {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: RejectType,
+    pub id: Iri,
+    pub actor: Reference<Actor>,
+    pub object: Reference<Follow>,
+}
+
+impl Reject {
+    #[must_use]
+    pub fn new(id: Iri, actor: Reference<Actor>, object: Reference<Follow>) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind: RejectType::default(),
+            id,
+            actor,
+            object,
+        }
+    }
+}
+
+/// A `Like` activity (favourite).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Like {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: LikeType,
+    pub id: Iri,
+    pub actor: Reference<Actor>,
+    pub object: Iri,
+}
+
+impl Like {
+    #[must_use]
+    pub fn new(id: Iri, actor: Reference<Actor>, object: Iri) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind: LikeType::default(),
+            id,
+            actor,
+            object,
+        }
+    }
+}
+
+/// An `Announce` activity (boost/reblog).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Announce {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: AnnounceType,
+    pub id: Iri,
+    pub actor: Reference<Actor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub to: Vec<Iri>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cc: Vec<Iri>,
+    pub object: Iri,
+}
+
+impl Announce {
+    #[must_use]
+    pub fn new(id: Iri, actor: Reference<Actor>, object: Iri) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind: AnnounceType::default(),
+            id,
+            actor,
+            published: None,
+            to: Vec::new(),
+            cc: Vec::new(),
+            object,
+        }
+    }
+}
+
+/// A `Block` activity.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Block {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: BlockType,
+    pub id: Iri,
+    pub actor: Reference<Actor>,
+    pub object: Iri,
+}
+
+impl Block {
+    #[must_use]
+    pub fn new(id: Iri, actor: Reference<Actor>, object: Iri) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind: BlockType::default(),
+            id,
+            actor,
+            object,
+        }
+    }
+}
+
+/// A `Tombstone` object, used as the body of a [`Delete`].
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Tombstone {
+    #[serde(rename = "type")]
+    pub kind: TombstoneType,
+    pub id: Iri,
+}
+
+impl Tombstone {
+    #[must_use]
+    pub fn new(id: Iri) -> Self {
+        Self {
+            kind: TombstoneType::default(),
+            id,
+        }
+    }
+}
+
+/// A `Delete` activity for a removed object.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Delete {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: DeleteType,
+    pub id: Iri,
+    pub actor: Reference<Actor>,
+    pub object: Tombstone,
+}
+
+impl Delete {
+    #[must_use]
+    pub fn new(id: Iri, actor: Reference<Actor>, object: Tombstone) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind: DeleteType::default(),
+            id,
+            actor,
+            object,
+        }
+    }
+}
+
+/// An `Undo` activity wrapping a previously-emitted activity of type `T`.
+///
+/// The wrapped `object` is embedded inline; callers should clear its own
+/// `@context` (set `context` to `None`) before wrapping it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Undo<T> {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: UndoType,
+    pub id: Iri,
+    pub actor: Reference<Actor>,
+    pub object: T,
+}
+
+impl<T> Undo<T> {
+    #[must_use]
+    pub fn new(id: Iri, actor: Reference<Actor>, object: T) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind: UndoType::default(),
             id,
             actor,
             object,
@@ -423,6 +636,81 @@ mod tests {
         );
 
         assert_eq!(roundtrip(&create), create);
+    }
+
+    #[test]
+    fn like_block_delete_and_undo_shapes() {
+        let like = Like::new(
+            iri("https://example.com/activities/like/1"),
+            Reference::id(iri("https://example.com/users/alice")),
+            iri("https://remote.example/notes/9"),
+        );
+        assert_eq!(
+            serde_json::to_value(&like).expect("serialize like"),
+            json!({
+                "@context": ACTIVITYSTREAMS_CONTEXT,
+                "type": "Like",
+                "id": "https://example.com/activities/like/1",
+                "actor": "https://example.com/users/alice",
+                "object": "https://remote.example/notes/9",
+            })
+        );
+
+        let tombstone = Tombstone::new(iri("https://example.com/notes/1"));
+        let delete = Delete::new(
+            iri("https://example.com/notes/1#delete"),
+            Reference::id(iri("https://example.com/users/alice")),
+            tombstone,
+        );
+        assert_eq!(
+            serde_json::to_value(&delete).expect("serialize delete")["object"],
+            json!({ "type": "Tombstone", "id": "https://example.com/notes/1" })
+        );
+        assert_eq!(roundtrip(&delete), delete);
+
+        // Undo embeds the wrapped activity without its own @context.
+        let mut inner = Like::new(
+            iri("https://example.com/activities/like/1"),
+            Reference::id(iri("https://example.com/users/alice")),
+            iri("https://remote.example/notes/9"),
+        );
+        inner.context = None;
+        let undo = Undo::new(
+            iri("https://example.com/activities/undo/1"),
+            Reference::id(iri("https://example.com/users/alice")),
+            inner,
+        );
+        let value = serde_json::to_value(&undo).expect("serialize undo");
+        assert_eq!(value["type"], json!("Undo"));
+        assert!(value["object"].get("@context").is_none());
+        assert_eq!(value["object"]["type"], json!("Like"));
+        assert_eq!(roundtrip(&undo), undo);
+    }
+
+    #[test]
+    fn announce_carries_audience_and_publish_time() {
+        let mut announce = Announce::new(
+            iri("https://example.com/activities/announce/1"),
+            Reference::id(iri("https://example.com/users/alice")),
+            iri("https://remote.example/notes/9"),
+        );
+        announce.published = Some("2026-05-29T06:30:00Z".to_string());
+        announce.to = Vec::from([iri(ACTIVITYSTREAMS_PUBLIC)]);
+        announce.cc = Vec::from([iri("https://example.com/users/alice/followers")]);
+        assert_eq!(roundtrip(&announce), announce);
+    }
+
+    #[test]
+    fn note_carries_mastodon_audience_fields() {
+        let mut note = Note::new(iri("https://example.com/notes/1"));
+        note.attributed_to = Some(Reference::id(iri("https://example.com/users/alice")));
+        note.content = Some("Hello".to_string());
+        note.sensitive = Some(false);
+        note.url = Some(iri("https://example.com/@alice/1"));
+        note.to = Vec::from([iri(ACTIVITYSTREAMS_PUBLIC)]);
+        note.cc = Vec::from([iri("https://example.com/users/alice/followers")]);
+        note.published = Some("2026-05-29T06:30:00Z".to_string());
+        assert_eq!(roundtrip(&note), note);
     }
 
     #[test]
