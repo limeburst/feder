@@ -5,5 +5,6 @@
 //! They are framework-agnostic — callers supply byte slices, header pairs, and a
 //! [`reqwest::Client`].
 
+pub mod delivery;
 pub mod signature;
 pub mod webfinger;
