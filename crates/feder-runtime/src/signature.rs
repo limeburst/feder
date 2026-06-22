@@ -66,6 +66,51 @@ pub fn sign_request(
     })
 }
 
+/// Headers produced by [`sign_get`] for an authorized-fetch GET request.
+#[derive(Debug, Clone)]
+pub struct SignedGet {
+    /// Value for the `Signature` header.
+    pub signature: String,
+    /// Value for the `Date` header.
+    pub date: String,
+}
+
+/// Sign an outgoing HTTP GET request using RSA-SHA256, for "authorized fetch"
+/// (secure mode) servers that require a signed dereference.
+///
+/// A GET has no body, so unlike [`sign_request`] it signs only
+/// `(request-target) host date` and produces no `Digest`.
+///
+/// # Arguments
+/// * `url`             – Full URL being fetched
+/// * `key_id`          – `keyId` URI, typically `https://domain/actor#main-key`
+/// * `private_key_pem` – PKCS#8 or PKCS#1 PEM-encoded RSA private key
+pub fn sign_get(url: &str, key_id: &str, private_key_pem: &str) -> anyhow::Result<SignedGet> {
+    let date = chrono::Utc::now()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string();
+
+    let parsed = url::Url::parse(url).context("invalid URL")?;
+    let host = parsed.host_str().unwrap_or("").to_string();
+    let mut path = parsed.path().to_string();
+    if let Some(query) = parsed.query() {
+        path.push('?');
+        path.push_str(query);
+    }
+
+    let signing_string = format!(
+        "(request-target): get {path}\nhost: {host}\ndate: {date}"
+    );
+
+    let sig_b64 = rsa_sign(private_key_pem, signing_string.as_bytes())?;
+    let signature = format!(
+        r#"keyId="{}",algorithm="rsa-sha256",headers="(request-target) host date",signature="{}""#,
+        key_id, sig_b64
+    );
+
+    Ok(SignedGet { signature, date })
+}
+
 /// Verify the HTTP Signature on an incoming POST request.
 ///
 /// # Arguments
@@ -219,6 +264,25 @@ mod tests {
             ("signature", signed.signature.as_str()),
         ];
         verify_request("post", "/users/bob/inbox", &headers, body, &pub_pem).unwrap();
+    }
+
+    #[test]
+    fn sign_get_then_verify_roundtrips() {
+        let (priv_pem, pub_pem) = keypair();
+        let signed = sign_get(
+            "https://remote.example/users/bob",
+            "https://a.test/actor#main-key",
+            &priv_pem,
+        )
+        .unwrap();
+
+        let headers = [
+            ("host", "remote.example"),
+            ("date", signed.date.as_str()),
+            ("signature", signed.signature.as_str()),
+        ];
+        // A GET has no body; verification must pass without a Digest header.
+        verify_request("get", "/users/bob", &headers, b"", &pub_pem).unwrap();
     }
 
     #[test]
