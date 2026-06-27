@@ -173,6 +173,7 @@ activitystreams_type!(LikeType, Like);
 activitystreams_type!(AnnounceType, Announce);
 activitystreams_type!(BlockType, Block);
 activitystreams_type!(DeleteType, Delete);
+activitystreams_type!(UpdateType, Update);
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ActorType {
@@ -513,6 +514,34 @@ impl Delete {
     }
 }
 
+/// An `Update` activity wrapping a changed object of type `T`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Update<T> {
+    #[serde(rename = "@context", skip_serializing_if = "Option::is_none")]
+    pub context: Option<Iri>,
+    #[serde(rename = "type")]
+    pub kind: UpdateType,
+    pub id: Iri,
+    pub actor: Reference<Actor>,
+    #[serde(default, skip_serializing_if = "References::is_empty")]
+    pub to: References<Iri>,
+    pub object: T,
+}
+
+impl<T> Update<T> {
+    #[must_use]
+    pub fn new(id: Iri, actor: Reference<Actor>, object: T) -> Self {
+        Self {
+            context: Some(default_context()),
+            kind: UpdateType::default(),
+            id,
+            actor,
+            to: References::new(),
+            object,
+        }
+    }
+}
+
 /// An `Undo` activity wrapping a previously-emitted activity of type `T`.
 ///
 /// The wrapped `object` is embedded inline; callers should clear its own
@@ -681,7 +710,12 @@ pub struct Authorization {
 
 impl Authorization {
     #[must_use]
-    pub fn new(kind: AuthorizationType, id: Iri, interacting_object: Iri, interaction_target: Iri) -> Self {
+    pub fn new(
+        kind: AuthorizationType,
+        id: Iri,
+        interacting_object: Iri,
+        interaction_target: Iri,
+    ) -> Self {
         Self {
             context: Some(default_context()),
             kind,
@@ -840,6 +874,29 @@ mod tests {
     }
 
     #[test]
+    fn update_embeds_object_and_carries_audience() {
+        let mut actor = Actor::person(
+            iri("https://example.com/users/alice"),
+            iri("https://example.com/users/alice/inbox"),
+            iri("https://example.com/users/alice/outbox"),
+        );
+        actor.context = None;
+        let mut update = Update::new(
+            iri("https://example.com/users/alice#updates/1"),
+            Reference::id(iri("https://example.com/users/alice")),
+            actor,
+        );
+        update.to = References::one(iri(ACTIVITYSTREAMS_PUBLIC));
+
+        let value = serde_json::to_value(&update).expect("serialize update");
+        assert_eq!(value["type"], json!("Update"));
+        assert_eq!(value["to"], json!(ACTIVITYSTREAMS_PUBLIC));
+        assert_eq!(value["object"]["type"], json!("Person"));
+        assert!(value["object"].get("@context").is_none());
+        assert_eq!(roundtrip(&update), update);
+    }
+
+    #[test]
     fn announce_carries_audience_and_publish_time() {
         let mut announce = Announce::new(
             iri("https://example.com/activities/announce/1"),
@@ -936,7 +993,10 @@ mod tests {
             Reference::id(iri("https://b.test/users/bob")),
             iri("https://a.test/users/alice/feature_requests/1"),
         );
-        assert_eq!(serde_json::to_value(&reject).expect("serialize reject")["type"], "Reject");
+        assert_eq!(
+            serde_json::to_value(&reject).expect("serialize reject")["type"],
+            "Reject"
+        );
         assert_eq!(roundtrip(&reject), reject);
     }
 
